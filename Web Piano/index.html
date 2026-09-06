@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Keys — C++/WebAssembly piano</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&display=swap');
+  *{ box-sizing: border-box; }
+  body{
+    margin: 0; min-height: 100vh;
+    background: radial-gradient(ellipse at 50% -10%, #3a281d 0%, #211611 55%, #140d09 100%);
+    font-family: 'Inter', sans-serif; color: #ece4d6;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 48px 20px;
+  }
+  header{ text-align: center; margin-bottom: 8px; }
+  h1{ font-family: 'Fraunces', serif; font-weight: 600; font-size: clamp(32px, 6vw, 52px); margin: 0; color: #f6f1e6; }
+  header p{ font-size: 13px; color: #9c8f7c; margin: 10px 0 0; max-width: 480px; line-height: 1.6; }
+  header p kbd{ font-family: 'Inter', sans-serif; font-size: 12px; background: #3a2c22; border: 1px solid #4a382a; border-radius: 4px; padding: 1px 6px; color: #c79a55; }
+  .engine-tag{ font-size: 11px; letter-spacing: 0.08em; color: #8a6a3c; margin-top: 14px; }
+  .rack{ margin-top: 30px; background: linear-gradient(180deg, #2c1e17, #1a110c); border-radius: 20px; padding: 24px 24px 18px;
+    box-shadow: 0 40px 80px -20px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04) inset; max-width: 900px; }
+  #piano{ position: relative; display: flex; outline: none; height: 210px; user-select: none; }
+  .wkey{ position: relative; flex: 1; height: 100%; background: linear-gradient(180deg, #f6f1e6 0%, #ddd3bd 100%);
+    border: 1px solid #b9ac8f; border-top: none; border-radius: 0 0 8px 8px; margin-right: 2px;
+    box-shadow: 0 6px 6px rgba(0,0,0,0.25) inset, 0 3px 0 rgba(255,255,255,0.6) inset;
+    display: flex; align-items: flex-end; justify-content: center; padding-bottom: 12px; cursor: pointer;
+    transition: transform 0.05s ease; }
+  .wkey:last-child{ margin-right: 0; }
+  .wkey .lbl{ font-size: 11px; color: #8c7f68; font-weight: 500; }
+  .wkey.active{ background: linear-gradient(180deg, #e9c98a 0%, #c79a55 100%); transform: translateY(3px); }
+  .wkey.active .lbl{ color: #4a3416; }
+  .bkey{ position: absolute; top: 0; width: 6.4%; height: 60%; background: linear-gradient(180deg, #3a2c22 0%, #17110d 55%, #0c0806 100%);
+    border-radius: 0 0 6px 6px; z-index: 2; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 10px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.5); cursor: pointer; transition: transform 0.05s ease; }
+  .bkey .lbl{ font-size: 10px; color: #a8917a; }
+  .bkey.active{ background: linear-gradient(180deg, #8a6a3c, #6b4e28); transform: translateY(3px); }
+  .statusbar{ margin-top: 16px; font-size: 12px; color: #9c8f7c; text-align: center; }
+  footer{ margin-top: 30px; font-size: 12px; color: #9c8f7c; }
+  footer span{ color: #8a6a3c; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Keys</h1>
+  <p>Play it with your computer keyboard — <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> <kbd>F</kbd> <kbd>G</kbd> <kbd>H</kbd> <kbd>J</kbd> <kbd>K</kbd> for white keys, <kbd>W</kbd> <kbd>E</kbd> <kbd>T</kbd> <kbd>Y</kbd> <kbd>U</kbd> for black keys.</p>
+  <div class="engine-tag">audio engine written in C++ · compiled to WebAssembly</div>
+</header>
+
+<div class="rack">
+  <div id="piano" tabindex="0"></div>
+  <div class="statusbar" id="status">loading C++ audio engine…</div>
+</div>
+
+<footer>Made by <span>Mash-Labs 01</span></footer>
+
+<script src="piano.js"></script>
+<script>
+(function(){
+  var whiteKeys = [
+    {key:'a', note:'C4', freq:261.63},
+    {key:'s', note:'D4', freq:293.66},
+    {key:'d', note:'E4', freq:329.63},
+    {key:'f', note:'F4', freq:349.23},
+    {key:'g', note:'G4', freq:392.00},
+    {key:'h', note:'A4', freq:440.00},
+    {key:'j', note:'B4', freq:493.88},
+    {key:'k', note:'C5', freq:523.25}
+  ];
+  var blackKeys = [
+    {key:'w', note:'C#4', freq:277.18, after:0},
+    {key:'e', note:'D#4', freq:311.13, after:1},
+    {key:'t', note:'F#4', freq:369.99, after:3},
+    {key:'y', note:'G#4', freq:415.30, after:4},
+    {key:'u', note:'A#4', freq:466.16, after:5}
+  ];
+  var keyIdMap = {};
+  whiteKeys.concat(blackKeys).forEach(function(k, i){ keyIdMap[k.key] = i + 1; });
+
+  var piano = document.getElementById('piano');
+  var status = document.getElementById('status');
+  var wCount = whiteKeys.length;
+
+  whiteKeys.forEach(function(k){
+    var el = document.createElement('div');
+    el.className = 'wkey'; el.dataset.key = k.key;
+    el.innerHTML = '<span class="lbl">' + k.key.toUpperCase() + '</span>';
+    piano.appendChild(el);
+  });
+  blackKeys.forEach(function(k){
+    var el = document.createElement('div');
+    el.className = 'bkey'; el.dataset.key = k.key;
+    var wPct = 100 / wCount;
+    el.style.left = ((k.after + 1) * wPct - wPct * 0.32) + '%';
+    el.innerHTML = '<span class="lbl">' + k.key.toUpperCase() + '</span>';
+    piano.appendChild(el);
+  });
+
+  var keyMap = {};
+  whiteKeys.concat(blackKeys).forEach(function(k){ keyMap[k.key] = k; });
+
+  // ---- C++ / WASM audio engine wiring ----
+  var audioCtx, module, noteOnFn, noteOffFn, renderFn, processor, outPtr, wasmReady = false;
+
+  PianoModule().then(function(mod){
+    module = mod;
+    noteOnFn = module.cwrap('note_on', null, ['number','number']);
+    noteOffFn = module.cwrap('note_off', null, ['number']);
+    renderFn = module.cwrap('render', null, ['number','number']);
+    wasmReady = true;
+    status.textContent = 'C++ engine ready — click the keys to begin';
+  });
+
+  function ensureAudio(){
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    var bufSize = 1024;
+    outPtr = module._malloc(bufSize * 4); // float32
+    processor = audioCtx.createScriptProcessor(bufSize, 0, 1);
+    processor.onaudioprocess = function(e){
+      if (!wasmReady) return;
+      renderFn(outPtr, bufSize);
+      var out = e.outputBuffer.getChannelData(0);
+      var heap = new Float32Array(module.HEAPF32.buffer, outPtr, bufSize);
+      out.set(heap);
+    };
+    processor.connect(audioCtx.destination);
+  }
+
+  var pressed = {};
+  function noteOn(letter){
+    if (!keyMap[letter] || pressed[letter] || !wasmReady) return;
+    ensureAudio();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    pressed[letter] = true;
+    noteOnFn(keyIdMap[letter], keyMap[letter].freq);
+    var el = piano.querySelector('[data-key="' + letter + '"]');
+    if (el) el.classList.add('active');
+    status.textContent = 'playing ' + keyMap[letter].note + ' (rendered by C++ engine)';
+  }
+  function noteOff(letter){
+    if (!keyMap[letter] || !pressed[letter]) return;
+    delete pressed[letter];
+    noteOffFn(keyIdMap[letter]);
+    var el = piano.querySelector('[data-key="' + letter + '"]');
+    if (el) el.classList.remove('active');
+  }
+
+  document.addEventListener('keydown', function(e){
+    if (e.repeat) return;
+    var k = e.key.toLowerCase();
+    if (keyMap[k]) { e.preventDefault(); noteOn(k); }
+  });
+  document.addEventListener('keyup', function(e){
+    var k = e.key.toLowerCase();
+    if (keyMap[k]) noteOff(k);
+  });
+  piano.addEventListener('mousedown', function(e){
+    var t = e.target.closest('[data-key]');
+    if (t) noteOn(t.dataset.key);
+  });
+  piano.addEventListener('mouseup', function(){ Object.keys(pressed).forEach(noteOff); });
+  piano.addEventListener('mouseleave', function(){ Object.keys(pressed).forEach(noteOff); });
+})();
+</script>
+</body>
+</html>
